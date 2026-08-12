@@ -1,0 +1,618 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  READER
+  ADMIN
+  EDITOR
+  MODERATOR
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum EditorialStatus {
+  DRAFT
+  REVIEW
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+  DELETED
+}
+
+enum PublicationKind {
+  MAGAZINE
+  BOOK
+}
+
+enum ResourceType {
+  IMAGE
+  VIDEO
+  AUDIO
+  PDF
+  LINK
+}
+
+enum StorageDriver {
+  EXTERNAL
+  LOCAL
+  S3
+}
+
+enum UploadStatus {
+  PENDING
+  UPLOADING
+  COMPLETE
+  FAILED
+  ABORTED
+}
+
+enum CommentStatus {
+  PENDING
+  VISIBLE
+  HIDDEN
+  REPORTED
+}
+
+enum ContactStatus {
+  NEW
+  IN_PROGRESS
+  ANSWERED
+  ARCHIVED
+}
+
+enum ContactReplyStatus {
+  DRAFT
+  QUEUED
+  SENT
+  FAILED
+}
+
+enum OAuthProvider {
+  GOOGLE
+  X
+}
+
+enum LogLevel {
+  INFO
+  WARNING
+  ERROR
+}
+
+enum MetricEventType {
+  PAGE_VIEW
+  READING_STARTED
+  READING_COMPLETED
+  READING_TIME
+  ATTENTION
+  DOWNLOAD
+  COMMENT
+  RATING
+  REFERRAL
+}
+
+model User {
+  id                    String               @id @default(uuid()) @db.Uuid
+  email                 String               @unique
+  displayName           String
+  passwordHash          String?
+  role                  UserRole             @default(READER)
+  status                UserStatus           @default(ACTIVE)
+  avatarUrl             String?
+  lastLoginAt           DateTime?
+  deletedAt             DateTime?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  profile               UserProfile?
+  preference            UserPreference?
+  sessions              Session[]
+  oauthAccounts         OAuthAccount[]
+  passwordResetTokens   PasswordResetToken[]
+  savedNotes            SavedNote[]
+  comments              Comment[]
+  commentVotes          CommentVote[]
+  noteRatings           NoteRating[]
+  commentReports        CommentReport[]       @relation("CommentReportAuthor")
+  reviewedReports       CommentReport[]       @relation("CommentReportReviewer")
+  createdEditions       Edition[]             @relation("EditionCreatedBy")
+  updatedEditions       Edition[]             @relation("EditionUpdatedBy")
+  createdNotes          Note[]                @relation("NoteCreatedBy")
+  updatedNotes          Note[]                @relation("NoteUpdatedBy")
+  createdResources      Resource[]            @relation("ResourceCreatedBy")
+  createdCategories     Category[]            @relation("CategoryCreatedBy")
+  moderatedComments     Comment[]             @relation("CommentModeratedBy")
+  assignedContacts      ContactMessage[]      @relation("ContactAssignedTo")
+  contactReplies        ContactReply[]
+  resourceUploads       ResourceUpload[]
+  adminLogs             AdminLog[]
+
+  @@index([role, status])
+  @@map("users")
+}
+
+model UserProfile {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @unique @db.Uuid
+  publicName  String?
+  bio         String?
+  locale      String   @default("es")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_profiles")
+}
+
+model UserPreference {
+  id            String   @id @default(uuid()) @db.Uuid
+  userId        String   @unique @db.Uuid
+  theme         String   @default("dark")
+  locale        String   @default("es")
+  readingSize   String   @default("normal")
+  readingFont   String   @default("editorial")
+  contrast      String   @default("standard")
+  analyticsOptOut Boolean @default(false)
+  extra         Json?
+  expiresAt     DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+model Session {
+  id          String   @id @default(uuid()) @db.Uuid
+  userId      String   @db.Uuid
+  tokenHash   String   @unique
+  csrfHash    String
+  expiresAt   DateTime
+  lastSeenAt  DateTime @default(now())
+  revokedAt   DateTime?
+  createdAt   DateTime @default(now())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("sessions")
+}
+
+model OAuthAccount {
+  id                String        @id @default(uuid()) @db.Uuid
+  userId            String        @db.Uuid
+  provider          OAuthProvider
+  providerAccountId String
+  tokenCiphertext   String?
+  refreshCiphertext String?
+  tokenExpiresAt    DateTime?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  user              User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@unique([userId, provider])
+  @@map("oauth_accounts")
+}
+
+model PasswordResetToken {
+  id          String    @id @default(uuid()) @db.Uuid
+  userId      String    @db.Uuid
+  tokenHash   String    @unique
+  expiresAt   DateTime
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@map("password_reset_tokens")
+}
+
+model SiteSettings {
+  id              String   @id @default("default")
+  brandName       String   @default("La Guillotina")
+  publicationType String   @default("Revista anarquista")
+  statement       String   @default("Contra toda autoridad")
+  headerLine      String   @default("REVISTA ANARQUISTA / CONTRA TODA AUTORIDAD")
+  navigation      Json
+  footerStatement String
+  socialPrompt    String
+  socialLinks     Json
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("site_settings")
+}
+
+model Edition {
+  id              String            @id @default(uuid()) @db.Uuid
+  slug            String            @unique
+  kind            PublicationKind   @default(MAGAZINE)
+  number          Int?
+  title           String
+  subtitle        String?
+  author          String?
+  dateLabel       String
+  theme           String?
+  summary         String?
+  publication     String            @default("La Guillotina")
+  headerLine      String            @default("REVISTA ANARQUISTA / CONTRA TODA AUTORIDAD")
+  status          EditorialStatus   @default(DRAFT)
+  coverResourceId String?           @db.Uuid
+  scheduledAt     DateTime?
+  publishedAt     DateTime?
+  archivedAt      DateTime?
+  deletedAt       DateTime?
+  createdById     String?           @db.Uuid
+  updatedById     String?           @db.Uuid
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  coverResource   Resource?         @relation("EditionCoverResource", fields: [coverResourceId], references: [id], onDelete: SetNull)
+  createdBy       User?             @relation("EditionCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy       User?             @relation("EditionUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  notes           Note[]
+  resources       EditionResource[]
+  analyticsEvents AnalyticsEvent[]
+
+  @@unique([kind, number])
+  @@index([status, publishedAt])
+  @@map("editions")
+}
+
+model Note {
+  id               String            @id @default(uuid()) @db.Uuid
+  slug             String            @unique
+  editionId        String?           @db.Uuid
+  title            String
+  excerpt          String
+  bodyMarkdown     String
+  authorName       String            @default("Redacción")
+  status           EditorialStatus   @default(DRAFT)
+  readingMinutes   Int               @default(3)
+  fragment         String?
+  x                Int?
+  y                Int?
+  width            Int?
+  height           Int?
+  tone             String            @default("red")
+  readMoreLabel    String            @default("LEER +")
+  readMoreSubtitle String?
+  sortOrder        Int               @default(0)
+  editionLink      Boolean           @default(false)
+  scheduledAt      DateTime?
+  publishedAt      DateTime?
+  archivedAt       DateTime?
+  deletedAt        DateTime?
+  createdById      String?           @db.Uuid
+  updatedById      String?           @db.Uuid
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  edition          Edition?          @relation(fields: [editionId], references: [id], onDelete: SetNull)
+  createdBy        User?             @relation("NoteCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  updatedBy        User?             @relation("NoteUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+  categories       NoteCategory[]
+  resources        NoteResource[]
+  comments         Comment[]
+  ratings          NoteRating[]
+  savedBy          SavedNote[]
+  analyticsEvents  AnalyticsEvent[]
+
+  @@index([editionId, status, sortOrder])
+  @@index([status, publishedAt])
+  @@map("notes")
+}
+
+model Category {
+  id          String            @id @default(uuid()) @db.Uuid
+  slug        String            @unique
+  name        String            @unique
+  description String
+  color       String
+  status      EditorialStatus   @default(PUBLISHED)
+  deletedAt   DateTime?
+  createdById String?           @db.Uuid
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  createdBy   User?             @relation("CategoryCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  notes       NoteCategory[]
+
+  @@index([status, name])
+  @@map("categories")
+}
+
+model NoteCategory {
+  noteId     String   @db.Uuid
+  categoryId String   @db.Uuid
+  createdAt  DateTime @default(now())
+  note       Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@id([noteId, categoryId])
+  @@map("note_categories")
+}
+
+model Resource {
+  id               String            @id @default(uuid()) @db.Uuid
+  type             ResourceType
+  storageDriver    StorageDriver     @default(EXTERNAL)
+  name             String
+  url              String
+  objectKey        String?
+  fileName         String?
+  fileSize         Int               @default(0)
+  mimeType         String?
+  alt              String
+  credit           String
+  license          String
+  status           EditorialStatus   @default(DRAFT)
+  uploadStatus     UploadStatus      @default(COMPLETE)
+  width            Int?
+  height           Int?
+  durationSeconds  Int?
+  checksum         String?
+  resourceDate     DateTime          @default(now())
+  deletedAt        DateTime?
+  createdById      String?           @db.Uuid
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  createdBy        User?             @relation("ResourceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  coverForEditions Edition[]          @relation("EditionCoverResource")
+  notes            NoteResource[]
+  editions         EditionResource[]
+  uploads          ResourceUpload[]
+  analyticsEvents  AnalyticsEvent[]
+
+  @@index([type, status, createdAt])
+  @@index([objectKey])
+  @@map("resources")
+}
+
+model NoteResource {
+  noteId     String   @db.Uuid
+  resourceId String   @db.Uuid
+  role       String   @default("attachment")
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  note       Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+
+  @@id([noteId, resourceId])
+  @@map("note_resources")
+}
+
+model EditionResource {
+  editionId  String   @db.Uuid
+  resourceId String   @db.Uuid
+  role       String   @default("attachment")
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  edition    Edition  @relation(fields: [editionId], references: [id], onDelete: Cascade)
+  resource   Resource @relation(fields: [resourceId], references: [id], onDelete: Restrict)
+
+  @@id([editionId, resourceId])
+  @@map("edition_resources")
+}
+
+model ResourceUpload {
+  id          String       @id @default(uuid()) @db.Uuid
+  resourceId  String       @db.Uuid
+  createdById String?      @db.Uuid
+  providerId  String?
+  objectKey   String
+  status      UploadStatus @default(PENDING)
+  fileName    String
+  fileSize    Int
+  mimeType    String
+  parts       Json?
+  expiresAt   DateTime
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  resource    Resource     @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  createdBy   User?        @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([status, expiresAt])
+  @@map("resource_uploads")
+}
+
+model Comment {
+  id               String          @id @default(uuid()) @db.Uuid
+  noteId           String          @db.Uuid
+  userId           String?         @db.Uuid
+  authorName       String
+  body             String
+  status           CommentStatus   @default(PENDING)
+  reportCount      Int             @default(0)
+  moderationNote   String?
+  moderatedById    String?         @db.Uuid
+  moderatedAt      DateTime?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  note             Note            @relation(fields: [noteId], references: [id], onDelete: Restrict)
+  user             User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  moderatedBy      User?           @relation("CommentModeratedBy", fields: [moderatedById], references: [id], onDelete: SetNull)
+  votes            CommentVote[]
+  reports          CommentReport[]
+
+  @@index([noteId, status, createdAt])
+  @@index([status, reportCount])
+  @@map("comments")
+}
+
+model CommentVote {
+  id         String   @id @default(uuid()) @db.Uuid
+  commentId  String   @db.Uuid
+  userId     String?  @db.Uuid
+  voterKey   String
+  createdAt  DateTime @default(now())
+  comment    Comment  @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([commentId, voterKey])
+  @@index([userId])
+  @@map("comment_votes")
+}
+
+model CommentReport {
+  id           String    @id @default(uuid()) @db.Uuid
+  commentId    String    @db.Uuid
+  reporterId   String?   @db.Uuid
+  reporterKey  String
+  reason       String
+  detail       String?
+  reviewedAt   DateTime?
+  reviewedById String?   @db.Uuid
+  createdAt    DateTime  @default(now())
+  comment      Comment   @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  reporter     User?     @relation("CommentReportAuthor", fields: [reporterId], references: [id], onDelete: SetNull)
+  reviewedBy   User?     @relation("CommentReportReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@unique([commentId, reporterKey])
+  @@index([reviewedAt, createdAt])
+  @@map("comment_reports")
+}
+
+model NoteRating {
+  id        String   @id @default(uuid()) @db.Uuid
+  noteId    String   @db.Uuid
+  userId    String?  @db.Uuid
+  voterKey  String
+  score     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  note      Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@unique([noteId, voterKey])
+  @@index([userId])
+  @@map("note_ratings")
+}
+
+model SavedNote {
+  userId    String   @db.Uuid
+  noteId    String   @db.Uuid
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  note      Note     @relation(fields: [noteId], references: [id], onDelete: Cascade)
+
+  @@id([userId, noteId])
+  @@map("saved_notes")
+}
+
+model ContactMessage {
+  id           String        @id @default(uuid()) @db.Uuid
+  name         String
+  email        String
+  subject      String
+  body         String
+  status       ContactStatus @default(NEW)
+  assignedToId String?       @db.Uuid
+  receivedAt   DateTime      @default(now())
+  archivedAt   DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  assignedTo   User?         @relation("ContactAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  replies      ContactReply[]
+
+  @@index([status, receivedAt])
+  @@map("contact_messages")
+}
+
+model ContactReply {
+  id          String             @id @default(uuid()) @db.Uuid
+  contactId   String             @db.Uuid
+  authorId    String?            @db.Uuid
+  body        String
+  status      ContactReplyStatus @default(DRAFT)
+  sentAt      DateTime?
+  error       String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  contact     ContactMessage     @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  author      User?              @relation(fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([contactId, createdAt])
+  @@map("contact_replies")
+}
+
+model AdminLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  actorId    String?  @db.Uuid
+  level      LogLevel @default(INFO)
+  action     String
+  entityType String?
+  entityId   String?
+  requestId  String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([level, createdAt])
+  @@index([entityType, entityId])
+  @@map("admin_logs")
+}
+
+model ErrorLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  code       String
+  message    String
+  route      String?
+  method     String?
+  statusCode Int
+  requestId  String?
+  context    Json?
+  createdAt  DateTime @default(now())
+
+  @@index([statusCode, createdAt])
+  @@map("error_logs")
+}
+
+model AnalyticsEvent {
+  id              String          @id @default(uuid()) @db.Uuid
+  type            MetricEventType
+  sessionHash     String?
+  editionId       String?         @db.Uuid
+  noteId          String?         @db.Uuid
+  resourceId      String?         @db.Uuid
+  segment         String?
+  sourceCategory  String?
+  durationSeconds Int?
+  progressPercent Int?
+  occurredAt      DateTime        @default(now())
+  edition         Edition?        @relation(fields: [editionId], references: [id], onDelete: SetNull)
+  note            Note?           @relation(fields: [noteId], references: [id], onDelete: SetNull)
+  resource        Resource?       @relation(fields: [resourceId], references: [id], onDelete: SetNull)
+
+  @@index([type, occurredAt])
+  @@index([noteId, occurredAt])
+  @@index([sessionHash, occurredAt])
+  @@map("analytics_events")
+}
+
+model AnalyticsDaily {
+  id            String          @id @default(uuid()) @db.Uuid
+  day           DateTime        @db.Date
+  type          MetricEventType
+  dimensionKey  String
+  noteId        String?
+  editionId     String?
+  resourceId    String?
+  segment       String?
+  sourceCategory String?
+  eventCount    Int             @default(0)
+  uniqueReaders Int             @default(0)
+  valueSum      Int             @default(0)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  @@unique([day, type, dimensionKey])
+  @@index([day, type])
+  @@map("analytics_daily")
+}
