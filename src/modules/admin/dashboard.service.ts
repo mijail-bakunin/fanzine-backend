@@ -1,7 +1,12 @@
 import type { PrismaClient, UserRole } from '../../generated/prisma/client.js';
 import { paginationMeta, pageWindow } from '../../lib/pagination.js';
-import { serializeResource } from '../content/serializers.js';
+import { serializeCoverMetadata, serializeResource } from '../content/serializers.js';
 import { buildDashboardAnalytics } from '../analytics/dashboard-analytics.js';
+import { translationStatuses } from '../content/localization.js';
+import { serializeCoverComposition } from '../content/cover-composition.js';
+import { serializeCoverArt } from '../content/edition-cover-art.js';
+import { serializeCoverTypography } from '../content/note-cover-typography.js';
+import { serializeCommentEmailDelivery } from './comment-moderation.js';
 
 export type DashboardSection = 'all' | 'editions' | 'notes' | 'resources' | 'categories' | 'contacts' | 'comments' | 'users' | 'logs' | 'analytics';
 
@@ -15,14 +20,18 @@ export async function getDashboard(prisma: PrismaClient, input: {
   from: Date;
 }) {
   const window = pageWindow(input.page, input.pageSize);
-  const status = input.status ? input.status.toUpperCase() as never : undefined;
+  const normalizedStatus = input.status?.toUpperCase();
+  const editorialStatuses = new Set(['DRAFT', 'REVIEW', 'SCHEDULED', 'PUBLISHED', 'ARCHIVED', 'DELETED']);
+  const commentStatuses = new Set(['PENDING', 'VISIBLE', 'HIDDEN', 'REPORTED', 'DELETED']);
+  const editorialStatus = normalizedStatus && editorialStatuses.has(normalizedStatus) ? normalizedStatus as never : undefined;
+  const commentStatus = normalizedStatus && commentStatuses.has(normalizedStatus) ? normalizedStatus as never : undefined;
   const contains = input.search ? { contains: input.search, mode: 'insensitive' as const } : undefined;
-  const editionWhere = { ...(status ? { status } : {}), ...(contains ? { OR: [{ title: contains }, { subtitle: contains }, { summary: contains }] } : {}) };
-  const noteWhere = { ...(status ? { status } : {}), ...(contains ? { OR: [{ title: contains }, { excerpt: contains }, { authorName: contains }] } : {}) };
-  const resourceWhere = { ...(status ? { status } : {}), ...(contains ? { OR: [{ name: contains }, { alt: contains }, { credit: contains }] } : {}) };
+  const editionWhere = { ...(editorialStatus ? { status: editorialStatus } : {}), ...(contains ? { OR: [{ title: contains }, { subtitle: contains }, { summary: contains }] } : {}) };
+  const noteWhere = { ...(editorialStatus ? { status: editorialStatus } : {}), ...(contains ? { OR: [{ title: contains }, { excerpt: contains }, { authorName: contains }] } : {}) };
+  const resourceWhere = { ...(editorialStatus ? { status: editorialStatus } : {}), ...(contains ? { OR: [{ name: contains }, { alt: contains }, { credit: contains }] } : {}) };
   const categoryWhere = contains ? { OR: [{ name: contains }, { description: contains }] } : {};
   const contactWhere = contains ? { OR: [{ name: contains }, { email: contains }, { subject: contains }, { body: contains }] } : {};
-  const commentWhere = contains ? { OR: [{ authorName: contains }, { body: contains }] } : {};
+  const commentWhere = { ...(commentStatus ? { status: commentStatus } : {}), ...(contains ? { OR: [{ authorName: contains }, { body: contains }, { moderationNote: contains }] } : {}) };
   const userWhere = contains ? { OR: [{ displayName: contains }, { email: contains }] } : {};
   const logWhere = contains ? { action: contains } : {};
   const load = (section: Exclude<DashboardSection, 'all'>) => isAllowed(input.role, section) && (input.section === 'all' || input.section === section);
@@ -44,7 +53,7 @@ export async function getDashboard(prisma: PrismaClient, input: {
     load('categories') ? prisma.category.count({ where: categoryWhere }) : 0,
     load('contacts') ? prisma.contactMessage.findMany({ where: contactWhere, ...window, orderBy: { receivedAt: 'desc' }, include: { replies: { orderBy: { updatedAt: 'desc' }, take: 1 } } }) : [],
     load('contacts') ? prisma.contactMessage.count({ where: contactWhere }) : 0,
-    load('comments') ? prisma.comment.findMany({ where: commentWhere, ...window, orderBy: { createdAt: 'desc' }, include: { note: { select: { slug: true, title: true } }, _count: { select: { reports: true, votes: true } } } }) : [],
+    load('comments') ? prisma.comment.findMany({ where: commentWhere, ...window, orderBy: { createdAt: 'desc' }, include: { note: { select: { slug: true, title: true } }, moderatedBy: { select: { displayName: true } }, _count: { select: { reports: true, votes: true } } } }) : [],
     load('comments') ? prisma.comment.count({ where: commentWhere }) : 0,
     load('users') ? prisma.user.findMany({ where: userWhere, ...window, orderBy: { createdAt: 'desc' }, include: { _count: { select: { comments: true, savedNotes: true } } } }) : [],
     load('users') ? prisma.user.count({ where: userWhere }) : 0,
@@ -64,7 +73,10 @@ export async function getDashboard(prisma: PrismaClient, input: {
       date: edition.dateLabel,
       status: edition.status.toLowerCase(),
       cover: edition.coverResource?.url ?? '',
+      coverArt: serializeCoverArt(edition.coverArt),
       noteIds: edition.notes.map(note => note.id),
+      translations: edition.localizedContent,
+      translationStatus: translationStatuses(edition.localizedContent),
       createdAt: edition.createdAt.toISOString(),
       updatedAt: edition.updatedAt.toISOString(),
     })),
@@ -85,10 +97,15 @@ export async function getDashboard(prisma: PrismaClient, input: {
         ratingsCount: scores.length,
         views: note._count.analyticsEvents,
         readingMinutes: note.readingMinutes,
+        ...serializeCoverComposition(note),
+        ...serializeCoverMetadata(note),
+        coverTypography: serializeCoverTypography(note.coverTypography),
+        translations: note.localizedContent,
+        translationStatus: translationStatuses(note.localizedContent),
         updatedAt: note.updatedAt.toISOString(),
       };
     }),
-    resources: resources.map(serializeResource),
+    resources: resources.map(resource => serializeResource(resource, 'es', true)),
     categories: categories.map(category => ({
       id: category.id,
       slug: category.slug,
@@ -97,6 +114,8 @@ export async function getDashboard(prisma: PrismaClient, input: {
       description: category.description,
       status: category.status.toLowerCase(),
       notesCount: category._count.notes,
+      translations: category.localizedContent,
+      translationStatus: translationStatuses(category.localizedContent),
     })),
     contacts: contacts.map(contact => ({
       id: contact.id,
@@ -112,11 +131,19 @@ export async function getDashboard(prisma: PrismaClient, input: {
     })),
     comments: comments.map(comment => ({
       id: comment.id,
+      parentId: comment.parentId,
       noteId: comment.note.slug,
       noteTitle: comment.note.title,
       author: comment.authorName,
+      isAnonymous: comment.userId === null,
+      authorType: comment.userId === null ? 'anonymous' : 'account',
       body: comment.body,
       status: comment.status.toLowerCase(),
+      moderationReason: comment.moderationNote,
+      moderatedAt: comment.moderatedAt?.toISOString() ?? null,
+      moderatedBy: comment.moderatedBy?.displayName ?? null,
+      deletedAt: comment.deletedAt?.toISOString() ?? null,
+      emailDelivery: serializeCommentEmailDelivery(comment),
       createdAt: comment.createdAt.toISOString(),
       reports: comment._count.reports,
       votes: comment._count.votes,
@@ -138,6 +165,10 @@ export async function getDashboard(prisma: PrismaClient, input: {
       level: log.level.toLowerCase(),
       actor: log.actor?.displayName ?? 'Sistema',
       action: log.action,
+      entityType: log.entityType,
+      entityId: log.entityId,
+      requestId: log.requestId,
+      metadata: log.metadata,
     })),
     pagination: {
       editions: meta(editionTotal),
@@ -158,7 +189,7 @@ export async function getDashboard(prisma: PrismaClient, input: {
   };
 }
 
-function isAllowed(role: UserRole, section: Exclude<DashboardSection, 'all'>) {
+export function isAllowed(role: UserRole, section: Exclude<DashboardSection, 'all'>) {
   if (role === 'ADMIN') return true;
   if (role === 'EDITOR') return ['editions', 'notes', 'resources', 'categories', 'analytics'].includes(section);
   if (role === 'MODERATOR') return ['contacts', 'comments'].includes(section);

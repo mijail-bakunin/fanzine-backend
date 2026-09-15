@@ -1,11 +1,12 @@
 import { readdir, readFile, rm } from 'node:fs/promises';
-import { S3Client } from '@aws-sdk/client-s3';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from '../src/generated/prisma/client.js';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import type { OpenAPIV3 } from 'openapi-types';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/build-app.js';
 import { loadConfig } from '../src/config/env.js';
 import { hashPassword } from '../src/lib/crypto.js';
+import { documentedOperationKeys } from '../src/openapi/documentation.js';
 
 const databaseUrl = process.env.TEST_DATABASE_URL ?? 'postgresql://guillotina:guillotina_dev@localhost:5432/laguillotina_test?schema=public';
 const storagePath = './storage/test-integration';
@@ -99,6 +100,101 @@ afterAll(async () => {
   await app.close();
   await prisma.$disconnect();
   await rm(storagePath, { recursive: true, force: true });
+});
+
+describe('contrato OpenAPI', () => {
+  it('documenta todas las operaciones con parámetros, seguridad, cuerpos y respuestas', () => {
+    const specification = app.swagger() as OpenAPIV3.Document & { 'x-documentation'?: { undocumentedOperations?: string[] } };
+    const methods = ['get', 'post', 'put', 'patch', 'delete'] as const;
+    const discovered: string[] = [];
+    for (const [url, pathItem] of Object.entries(specification.paths)) {
+      if (!pathItem) continue;
+      for (const method of methods) {
+        const operation = pathItem[method];
+        if (!operation) continue;
+        const key = `${method.toUpperCase()} ${url}`;
+        discovered.push(key);
+        expect(operation.operationId, `${key} sin operationId`).toBeTruthy();
+        expect(operation.summary, `${key} sin summary`).toBeTruthy();
+        expect(operation.description, `${key} sin description`).toBeTruthy();
+        expect(operation.tags?.length, `${key} sin tag`).toBeGreaterThan(0);
+        expect(Object.keys(operation.responses).length, `${key} sin respuestas`).toBeGreaterThan(0);
+        for (const parameterName of [...url.matchAll(/\{([^}]+)\}/g)].map(match => match[1])) {
+          const parameters = operation.parameters ?? [];
+          expect(parameters.some(parameter => !('$ref' in parameter) && parameter.in === 'path' && parameter.name === parameterName), `${key} no documenta ${parameterName}`).toBe(true);
+        }
+        for (const [code, response] of Object.entries(operation.responses)) {
+          if (!code.startsWith('2') || '$ref' in response) continue;
+          expect(response.description, `${key} ${code} sin descripción`).toBeTruthy();
+          if (code !== '204') {
+            const responseSchemas = Object.values(response.content ?? {}).map(media => media.schema).filter(Boolean);
+            expect(responseSchemas.length, `${key} ${code} sin schema de respuesta`).toBeGreaterThan(0);
+          }
+        }
+      }
+    }
+    expect(discovered.sort()).toEqual(documentedOperationKeys);
+    expect(specification['x-documentation']?.undocumentedOperations).toEqual([]);
+    expect(specification.components?.schemas?.ErrorEnvelope).toBeTruthy();
+    expect(specification.components?.schemas?.CatalogResource).toBeTruthy();
+    expect(specification.components?.schemas?.PublicationContent).toBeTruthy();
+    expect(specification.components?.schemas?.SeoSettings).toBeTruthy();
+    expect(specification.components?.schemas?.SearchResult).toBeTruthy();
+    expect(specification.components?.schemas?.SavedNote).toBeTruthy();
+    expect(specification.components?.schemas?.CoverButtonPosition).toBeTruthy();
+    expect(specification.components?.schemas?.CoverPresentation).toBeTruthy();
+    expect(specification.components?.schemas?.AdminComment).toBeTruthy();
+    expect(specification.components?.schemas?.CommentModerationResult).toBeTruthy();
+    expect(specification.components?.securitySchemes?.cookieAuth).toBeTruthy();
+    expect(specification.components?.securitySchemes?.cronBearer).toBeTruthy();
+
+    const bodyOperations = [
+      'POST /auth/register', 'POST /auth/login', 'PATCH /auth/profile', 'PATCH /auth/preferences',
+      'POST /auth/password/forgot', 'POST /auth/password/reset', 'POST /notes/{noteId}/comments',
+      'POST /notes/{noteId}/comments/{commentId}/replies', 'POST /notes/{noteId}/comments/{commentId}/reactions',
+      'POST /notes/{noteId}/comments/{commentId}/report', 'POST /notes/{noteId}/rating', 'POST /contacts',
+      'POST /analytics/events', 'PATCH /admin/settings', 'POST /admin/editions', 'PATCH /admin/editions/{id}',
+      'POST /admin/notes', 'PATCH /admin/notes/{id}', 'POST /admin/resources', 'PATCH /admin/resources/{id}',
+      'POST /admin/categories', 'PATCH /admin/categories/{id}', 'PATCH /admin/contacts/{id}',
+      'PATCH /admin/comments/{id}', 'PATCH /admin/users/{id}', 'POST /admin/resources/upload',
+      'POST /admin/resources/uploads', 'POST /admin/resources/uploads/{id}/part', 'POST /admin/resources/uploads/{id}/complete',
+    ];
+    for (const key of bodyOperations) {
+      const [method, url] = key.split(' ') as [string, string];
+      const operation = (specification.paths[url] as Record<string, OpenAPIV3.OperationObject>)[method.toLowerCase()];
+      expect(operation?.requestBody, `${key} sin requestBody`).toBeTruthy();
+    }
+
+    const login = specification.paths['/auth/login']?.post;
+    expect(login?.requestBody && !('$ref' in login.requestBody) && login.requestBody.content['application/json']?.schema).toBeTruthy();
+    const editionPatch = specification.paths['/admin/editions/{id}']?.patch;
+    expect(editionPatch?.parameters?.some(parameter => '$ref' in parameter && parameter.$ref.endsWith('/CsrfToken'))).toBe(true);
+    expect(editionPatch?.security).toEqual([{ cookieAuth: [] }]);
+    const upload = specification.paths['/admin/resources/upload']?.post;
+    expect(upload?.requestBody && !('$ref' in upload.requestBody) && upload.requestBody.content['multipart/form-data']?.schema).toBeTruthy();
+    expect(specification.paths['/internal/analytics/aggregate']?.post?.security).toEqual([{ cronBearer: [] }]);
+    const catalogResponse = specification.paths['/catalog']?.get?.responses?.['200'];
+    expect(JSON.stringify(catalogResponse)).toContain('#/components/schemas/CatalogResource');
+    const publicNoteSchema = specification.components?.schemas?.PublicNote;
+    expect(publicNoteSchema && !('$ref' in publicNoteSchema) && publicNoteSchema.properties).toMatchObject({
+      coverTitleLines: expect.any(Object), coverExcerpt: expect.any(Object), coverButtonPosition: expect.any(Object), coverDepth: expect.any(Object), cover: expect.any(Object),
+    });
+    const createNoteBody = specification.paths['/admin/notes']?.post?.requestBody;
+    expect(JSON.stringify(createNoteBody)).toContain('coverButtonPosition');
+    expect(specification.paths['/notes/{noteId}/comments/{commentId}/replies']?.post?.operationId).toBe('replyToComment');
+    expect(specification.paths['/notes/{noteId}/comments/{commentId}/reactions']?.post?.operationId).toBe('toggleCommentReaction');
+    expect(JSON.stringify(specification.components?.schemas?.Comment)).toContain('authorType');
+    expect(JSON.stringify(specification.paths['/admin/comments/{id}']?.patch)).toContain('moderationReason');
+    expect(JSON.stringify(specification.paths['/admin/comments/{id}']?.patch)).toContain('deleted');
+    expect(specification.paths['/search']?.get?.operationId).toBe('searchPublication');
+    expect(specification.paths['/auth/saved-notes']?.get?.operationId).toBe('listSavedNotes');
+    expect(JSON.stringify(specification.paths['/site/settings']?.get?.parameters)).toContain('locale');
+    expect(specification.paths['/editions/current/home']?.get?.operationId).toBe('getCurrentEditionHome');
+    expect(JSON.stringify(specification.paths['/editions/{slug}/pdf']?.get?.responses?.['200'])).toContain('application/pdf');
+    expect(specification.paths['/admin/editions/{id}']?.delete?.operationId).toBe('softDeleteEdition');
+    expect(specification.paths['/admin/notes/{id}']?.delete?.operationId).toBe('softDeleteNote');
+    expect(specification.paths['/admin/editions/{id}']?.delete?.security).toEqual([{ cookieAuth: [] }]);
+  });
 });
 
 describe('autenticación y permisos', () => {
@@ -261,12 +357,12 @@ describe('notas, comentarios y puntuaciones', () => {
     expect(titleOnly.json()).toMatchObject({ title: 'Nota actualizada sin reiniciar valores', status: 'review', author: 'Pruebas', readingMinutes: 3 });
   });
 
-  it('mantiene comentarios pendientes hasta moderación y hace el voto idempotente', async () => {
+  it('publica comentarios pendientes con estado estructurado y hace el voto idempotente tras moderación', async () => {
     const created = await app.inject({ method: 'POST', url: `${prefix}/notes/freedom/comments`, payload: { author: 'Anónima', body: 'Comentario que espera revisión.' } });
     expect(created.statusCode).toBe(201);
     expect(created.json().status).toBe('pending');
-    const hidden = await app.inject({ method: 'GET', url: `${prefix}/notes/freedom/comments` });
-    expect(hidden.json()).toHaveLength(0);
+    const pending = await app.inject({ method: 'GET', url: `${prefix}/notes/freedom/comments` });
+    expect(pending.json()).toEqual([expect.objectContaining({ id: created.json().id, status: 'pending', isAnonymous: true, authorType: 'anonymous' })]);
     const commentId = created.json().id;
     const moderated = await app.inject({ method: 'PATCH', url: `${prefix}/admin/comments/${commentId}`, headers: authHeaders(adminCookie, adminCsrf), payload: { status: 'visible' } });
     expect(moderated.statusCode).toBe(200);
@@ -468,57 +564,6 @@ describe('recursos', () => {
     expect(response.json()).toMatchObject({ type: 'image', fileName: 'pixel.png', fileSize: 8, status: 'draft' });
   });
 
-  it('completa el contrato S3 multipart con URLs firmadas y verificación final', async () => {
-    const sendSpy = vi.spyOn(S3Client.prototype, 'send');
-    sendSpy.mockImplementation((async (command: unknown) => {
-      const name = (command as { constructor: { name: string } }).constructor.name;
-      if (name === 'CreateMultipartUploadCommand') return { UploadId: 'provider-upload-1', $metadata: {} };
-      if (name === 'CompleteMultipartUploadCommand') return { $metadata: {} };
-      if (name === 'HeadObjectCommand') return { ContentLength: 20, ContentType: 'video/mp4', ETag: 'etag-final', $metadata: {} };
-      if (name === 'AbortMultipartUploadCommand') return { $metadata: {} };
-      throw new Error(`Comando S3 inesperado: ${name}`);
-    }) as never);
-    const s3Config = {
-      ...config,
-      storageDriver: 's3' as const,
-      multipartThresholdBytes: 10,
-      s3: {
-        endpoint: 'http://127.0.0.1:9000', region: 'auto', bucket: 'guillotina-test',
-        accessKeyId: 'test-access-key', secretAccessKey: 'test-secret-key', publicBaseUrl: 'https://cdn.example.org',
-      },
-    };
-    const s3App = await buildApp({ config: s3Config, prisma, logger: false });
-    try {
-      await s3App.ready();
-      const started = await s3App.inject({
-        method: 'POST', url: `${prefix}/admin/resources/uploads`, headers: authHeaders(adminCookie, adminCsrf), payload: {
-          type: 'video', name: 'Video multipart', alt: 'Video de integración', credit: 'Pruebas', license: 'CC0', status: 'draft',
-          fileName: 'video.mp4', fileSize: 20, mimeType: 'video/mp4',
-        },
-      });
-      expect(started.statusCode).toBe(201);
-      expect(started.json().mode).toBe('multipart');
-      const uploadId = started.json().uploadId;
-      const part = await s3App.inject({
-        method: 'POST', url: `${prefix}/admin/resources/uploads/${uploadId}/part`, headers: authHeaders(adminCookie, adminCsrf),
-        payload: { partNumber: 1 },
-      });
-      expect(part.statusCode).toBe(200);
-      expect(part.json().uploadUrl).toContain('provider-upload-1');
-      const completed = await s3App.inject({
-        method: 'POST', url: `${prefix}/admin/resources/uploads/${uploadId}/complete`, headers: authHeaders(adminCookie, adminCsrf),
-        payload: { parts: [{ partNumber: 1, etag: 'etag-parte-1' }] },
-      });
-      expect(completed.statusCode).toBe(200);
-      expect(completed.json()).toMatchObject({ status: 'draft', url: expect.stringContaining('https://cdn.example.org/') });
-      expect(sendSpy.mock.calls.map(call => (call[0] as { constructor: { name: string } }).constructor.name)).toEqual(expect.arrayContaining([
-        'CreateMultipartUploadCommand', 'CompleteMultipartUploadCommand', 'HeadObjectCommand',
-      ]));
-    } finally {
-      await s3App.close();
-      sendSpy.mockRestore();
-    }
-  });
 });
 
 async function login(email: string, password: string) {

@@ -43,7 +43,7 @@ export async function buildDashboardAnalytics(prisma: PrismaClient, from: Date) 
   return {
     summary: {
       visits,
-      uniqueReaders: Number(uniqueReaders[0]?.value ?? 0),
+      uniqueReaders: countValue(uniqueReaders),
       completedReads,
       avgReadingSeconds: Math.round(readingTime._avg.durationSeconds ?? 0),
       downloads,
@@ -64,9 +64,7 @@ export async function buildDashboardAnalytics(prisma: PrismaClient, from: Date) 
       completion: Math.round(Number(item.completion ?? 0)),
       rating: Number(Number(item.rating ?? 0).toFixed(1)),
     })),
-    attention: attention.length ? attention.map(item => ({ label: item.segment ?? 'Sin tramo', value: Math.round(Number(item.value ?? 0)) })) : [
-      { label: 'Inicio', value: 0 }, { label: 'Primer tercio', value: 0 }, { label: 'Segundo tercio', value: 0 }, { label: 'Final', value: 0 },
-    ],
+    attention: formatAttention(attention),
     sources: sources.map(item => ({
       label: sourceLabel(item.source),
       value: Math.round(Number(item.value) * 100 / sourceTotal),
@@ -75,6 +73,16 @@ export async function buildDashboardAnalytics(prisma: PrismaClient, from: Date) 
   };
 }
 
-function sourceLabel(value: string | null) {
+export function countValue(rows: CountRow[]) {
+  return Number(rows[0]?.value ?? 0);
+}
+
+export function formatAttention(items: Array<{ segment: string | null; value: number | null }>) {
+  return items.length ? items.map(item => ({ label: item.segment ?? 'Sin tramo', value: Math.round(Number(item.value ?? 0)) })) : [
+    { label: 'Inicio', value: 0 }, { label: 'Primer tercio', value: 0 }, { label: 'Segundo tercio', value: 0 }, { label: 'Final', value: 0 },
+  ];
+}
+
+export function sourceLabel(value: string | null) {
   return ({ direct: 'Directo', social: 'Redes', search: 'Búsqueda', referral: 'Referencias' } as Record<string, string>)[value ?? 'direct'] ?? 'Otros';
 }

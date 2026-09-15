@@ -12,7 +12,11 @@ Documentación OpenAPI en desarrollo:
 
 ```text
 http://localhost:3001/documentation
+http://localhost:3001/documentation/json
+http://localhost:3001/documentation/yaml
 ```
+
+El contrato documenta todas las operaciones con parámetros de ruta y consulta, headers, cookie de sesión, CSRF, cuerpos JSON o multipart, restricciones, ejemplos, respuestas de éxito y errores uniformes. La suite falla si aparece una ruta sin documentación centralizada.
 
 ## Arquitectura
 
@@ -33,7 +37,7 @@ La aplicación se organiza por módulos en `src/modules`: autenticación, conten
 
 - Node.js 20+; se probó con Node 24.
 - npm 10+.
-- Docker Desktop o una instancia PostgreSQL accesible.
+- Docker Desktop, o instancias accesibles de PostgreSQL y un proveedor S3-compatible para ejecutar la suite integral.
 
 ## Inicio local
 
@@ -41,7 +45,7 @@ Desde PowerShell:
 
 ```powershell
 Copy-Item .env.example .env
-docker compose up -d postgres
+docker compose up -d
 npm install
 npm run db:generate
 npm run db:migrate -- --name init
@@ -102,11 +106,13 @@ El seed incluye la edición `n-012-la-libertad`, 16 notas, categorías, recursos
 
 ## Pruebas
 
-Docker crea también la base `laguillotina_test`. La suite aplica migraciones automáticamente y nunca trunca la base de desarrollo:
+Docker crea la base aislada `laguillotina_test`, un servidor MinIO S3-compatible y el bucket `laguillotina-test`. Que el contenedor `minio-init` termine con código `0` es normal: es una tarea de inicialización de una sola ejecución. La suite aplica migraciones automáticamente y nunca trunca la base de desarrollo:
 
 ```powershell
 npm test
 ```
+
+La batería contiene **206 escenarios** en dieciséis archivos. No simula éxitos de infraestructura: usa PostgreSQL real, bytes reales en filesystem, archivos reales en el buzón de desarrollo, SMTP por TCP, sockets HTTP y solicitudes firmadas reales contra MinIO, incluidos PUT simples y multipart. La exportación editorial genera y vuelve a abrir PDFs binarios reales para comprobar formato A4, portada, paginación, texto, Unicode, marcadores y enlaces internos. También prueba publicación, fallback, permisos, búsqueda y medios editoriales ES/EN/RU, cobertura visual de las dieciséis notas del seed, cuerpos editoriales multilingües sincronizados, deduplicación de lecturas públicas simultáneas, el Manifiesto desplegable localizado y el asistente simulado público, validado y limitado por cliente. Cada prueba restablece solamente la base y el almacenamiento exclusivos del entorno de test.
 
 Para usar otra base:
 
@@ -115,25 +121,41 @@ $env:TEST_DATABASE_URL='postgresql://usuario:clave@host:5432/laguillotina_test?s
 npm test
 ```
 
-Cobertura mínima incluida:
+Cobertura funcional incluida:
 
-- registro, login, sesión y perfil;
-- rechazo de una lectora en rutas administrativas;
-- portada y creación administrativa de notas;
-- comentarios pendientes y moderación;
-- votos útiles idempotentes;
-- una puntuación corregible por cookie anónima;
-- subida multipart local con metadatos obligatorios.
-- configuración editorial y catálogo público paginado;
-- permisos diferenciados de `admin`, `editor` y `moderator`;
-- recuperación completa de contraseña con token de un solo uso;
-- borradores y envío de respuestas de contacto;
-- CRUD y borrado lógico editorial;
-- numeración concurrente de ediciones sin colisiones;
-- privacidad y agregación de analítica;
-- flujo S3 multipart con proveedor simulado.
+- salud, readiness, 404, headers de seguridad y CORS permitido/rechazado;
+- registro, Argon2id persistido, login, logout, sesión, CSRF, perfil, preferencias, guardadas, baja y recuperación de contraseña;
+- cuentas activas, suspendidas y eliminadas, límite de cinco sesiones y rate limiting observado;
+- roles `reader`, `admin`, `editor` y `moderator`, permisos por sección y revocación efectiva de sesiones;
+- configuración pública, ediciones, notas, catálogo y recursos con paginación, búsquedas, filtros y exclusión de borradores/eliminados;
+- creación, actualización, publicación, selección automática de edición vigente, relaciones, estados editoriales, auditoría, numeración concurrente y borrado lógico;
+- descarga PDF de ediciones publicadas con portada, índice enlazado, destinos por nota y fallbacks seguros ante recursos ausentes o incompletos;
+- comentarios y respuestas anónimas/autenticadas, moderación, reportes, reacciones reversibles, votos idempotentes compatibles y ratings corregibles por identidad;
+- contacto, borradores, envío real al buzón de desarrollo, validaciones y límites de abuso;
+- cargas locales con comprobación byte a byte, MIME, tamaños, limpieza ante error y servicio HTTP del archivo;
+- cargas S3 simples y multipart reales, URLs firmadas, ETags, finalización, mismatch de tamaño, expiración y cancelación;
+- analítica anónima, opt-out, DNT/GPC, agregación diaria, retención, idempotencia y dashboard de métricas;
+- contrato OpenAPI: todas las rutas registradas deben tener definición, operación, parámetros, bodies y respuestas documentadas.
 
-La suite actual contiene 18 pruebas de integración.
+Para generar el informe de cobertura del código productivo (texto y HTML en `coverage/`):
+
+```powershell
+npm run test:coverage
+```
+
+La configuración exige **100%** de sentencias, ramas, funciones y líneas. La medición verificada es 1466/1466 sentencias, 1121/1121 ramas, 350/350 funciones y 1294/1294 líneas, con 206 escenarios aprobados. Se incluye el bootstrap `src/app.ts`; sólo se excluyen el cliente Prisma generado y declaraciones TypeScript sin código ejecutable.
+
+Las capas también pueden ejecutarse por separado:
+
+```powershell
+npm run test:architecture # 4 restricciones estructurales y de contrato
+npm run test:integration  # 107 escenarios con PostgreSQL/filesystem/MinIO/PDF
+npm run test:e2e          # 4 recorridos por socket HTTP y bootstrap reales
+npm run test:stress       # 3 cargas concurrentes con reporte y umbrales
+npm run test:edge         # 41 fallos, fallbacks y estados extremos
+```
+
+La última ejecución de estrés local procesó 160 lecturas concurrentes sin fallos, 40 altas editoriales concurrentes sin colisiones y 24 votos simultáneos de una identidad conservando una única fila. El reporte detallado se regenera en `test-results/stress-latest.json` y queda fuera de Git. La metodología, los umbrales y los límites de interpretación están en [docs/TESTING.md](docs/TESTING.md).
 
 También se recomienda ejecutar:
 
@@ -148,6 +170,7 @@ Todas están descritas en `.env.example`. Las esenciales son:
 
 | Variable | Uso |
 |---|---|
+| `POSTGRES_PORT` | Puerto local publicado por Docker Compose; por defecto `5432` y configurable cuando otro PostgreSQL ya lo usa. |
 | `DATABASE_URL` | PostgreSQL; en serverless debe ser una URL con pooler. |
 | `API_PREFIX` | Por defecto `/laguillotina/api/v1`. |
 | `FRONTEND_ORIGINS` | Orígenes CORS separados por coma. |
@@ -157,6 +180,7 @@ Todas están descritas en `.env.example`. Las esenciales son:
 | `CRON_SECRET` | Protege la agregación/limpieza de métricas. |
 | `STORAGE_DRIVER` | `local` o `s3`. `local` está prohibido en producción. |
 | `PUBLIC_STORAGE_BASE_URL` | URL pública de archivos locales. |
+| `MODERATION_EMAIL_IMAGE_URL` | URL pública opcional del panorama del correo de moderación; por defecto usa el recurso seed servido por la API. |
 | `S3_*` | Endpoint, región, bucket, credenciales y URL pública S3/R2. |
 | `COOKIE_SECURE` | Debe ser `true` con HTTPS. |
 | `COOKIE_SAME_SITE` | `lax` bajo el mismo sitio; `none` si el frontend es cross-site. |
@@ -172,6 +196,7 @@ Los secretos deben ser diferentes entre entornos y generarse con entropía cript
 - Se permiten hasta cinco sesiones activas por cuenta; cambiar contraseña revoca las restantes.
 - Recuperación de contraseña responde siempre de forma genérica para evitar enumeración.
 - En desarrollo, los correos quedan como archivos ignorados por Git en `.dev-mailbox/`; no aparecen en logs.
+- El borrado moderado conserva el comentario para auditoría: los anónimos dejan un tombstone público sin cuerpo y los asociados a cuenta desaparecen del público y disparan un aviso por correo. El seed publica la imagen panorámica del aviso como `assets.moderationEmail`.
 - Las respuestas de contacto pueden guardarse como borrador o enviarse. En desarrollo quedan en `.dev-mailbox/`; con `MAIL_MODE=smtp` se entregan y registran como `sent` o `failed`.
 - La suspensión administrativa es reversible. La baja solicitada anonimiza datos personales, revoca sesiones y conserva comentarios como “Cuenta eliminada”.
 - Google y X tienen rutas y variables reservadas, pero responden `501` hasta completar la integración OAuth.
@@ -221,10 +246,14 @@ Puede ejecutarse mediante Vercel Cron o un cron del hosting.
 
 ## Catálogo y configuración pública
 
-- `GET /site/settings` publica la identidad editorial guardada en PostgreSQL.
+- `GET /site/settings?locale=es|en|ru` publica identidad, navegación, pie, autenticación, archivo, páginas institucionales, recursos de estado y SEO guardados en PostgreSQL.
 - `GET /catalog` entrega revistas, libros, muestras y multimedia con paginación y filtros.
 - `GET /resources` entrega una lista pública simple filtrable por tipo.
-- `GET/PATCH /admin/settings` administra marca, navegación, pie y vínculos sociales.
+- `GET /search` busca y agrupa notas, ediciones y recursos publicados con rutas listas para el frontend.
+- `GET /auth/saved-notes` entrega las guardadas enriquecidas y paginadas, sin consultas nota-por-nota.
+- `GET/PATCH /admin/settings` administra marca, navegación, pie, páginas y SEO por idioma.
+
+El frontend con `VITE_API_BASE_URL` debe consumir estos contratos como fuente editorial única. Textos técnicos puros (por ejemplo, un aviso de red o un indicador de carga) pueden permanecer en la capa UI, pero imágenes, videos, audio, PDFs, vínculos, cuerpos, resúmenes, comentarios, reacciones y valoraciones proceden de la API.
 
 El catálogo excluye borradores, cargas incompletas y contenido `deleted`.
 

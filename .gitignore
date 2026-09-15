@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 coverage/
+test-results/
 storage/*
 !storage/.gitkeep
 .dev-mailbox/*
@@ -11,3 +12,4 @@ storage/*
 src/generated/prisma/
 .vercel/
 npm-debug.log*
+.dev-server.*.log

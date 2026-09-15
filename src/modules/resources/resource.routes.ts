@@ -118,7 +118,7 @@ export const resourceRoutes: FastifyPluginAsync = async app => {
   });
 };
 
-function fieldValue(value: unknown) {
+export function fieldValue(value: unknown) {
   if (Array.isArray(value)) return fieldValue(value.at(-1));
   if (value && typeof value === 'object' && 'value' in value) return String((value as { value: unknown }).value ?? '');
   return String(value ?? '');

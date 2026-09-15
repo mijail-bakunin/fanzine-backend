@@ -38,6 +38,7 @@ const envSchema = z.object({
   S3_PUBLIC_BASE_URL: optionalString,
   MAIL_MODE: z.enum(['development', 'smtp']).default('development'),
   DEV_MAILBOX_PATH: z.string().default('./.dev-mailbox'),
+  MODERATION_EMAIL_IMAGE_URL: optionalString,
   SMTP_HOST: optionalString,
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_USER: optionalString,
@@ -92,6 +93,7 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
     mail: {
       mode: value.MAIL_MODE,
       developmentMailboxPath: value.DEV_MAILBOX_PATH,
+      moderationImageUrl: value.MODERATION_EMAIL_IMAGE_URL ?? `${value.PUBLIC_STORAGE_BASE_URL.replace(/\/$/, '')}/seed/comment-moderation-panorama.png`,
       smtpHost: value.SMTP_HOST,
       smtpPort: value.SMTP_PORT,
       smtpUser: value.SMTP_USER,

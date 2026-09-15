@@ -13,6 +13,9 @@ import {
   rotateCsrf,
 } from './auth-context.js';
 import { serializeUser } from './user-serializer.js';
+import { paginationMeta } from '../../lib/pagination.js';
+import { localizedString, publicLocaleSchema, resolveEditorialTranslation } from '../content/localization.js';
+import { serializeResource } from '../content/serializers.js';
 
 const email = z.string().trim().toLowerCase().email().max(254);
 const password = z.string().min(8).max(128);
@@ -86,7 +89,7 @@ export const authRoutes: FastifyPluginAsync = async app => {
     const user = await app.prisma.user.findUniqueOrThrow({ where: { id: auth.user.id } });
     let passwordHash: string | undefined;
     if (input.newPassword) {
-      if (!user.passwordHash || !(await verifyPassword(user.passwordHash, input.currentPassword ?? ''))) {
+      if (!user.passwordHash || !(await verifyPassword(user.passwordHash, currentPasswordOrEmpty(input.currentPassword)))) {
         throw new AppError(400, 'CURRENT_PASSWORD_INVALID', 'La contraseña actual no coincide.');
       }
       passwordHash = await hashPassword(input.newPassword);
@@ -152,6 +155,46 @@ export const authRoutes: FastifyPluginAsync = async app => {
     if (saved) await app.prisma.savedNote.delete({ where: key });
     else await app.prisma.savedNote.create({ data: { userId: auth.user.id, noteId: note.id } });
     return serializeUser(app.prisma, auth.user.id);
+  });
+
+  app.get('/auth/saved-notes', async request => {
+    const auth = requireAuth(request);
+    const query = parse(z.object({
+      locale: publicLocaleSchema,
+      page: z.coerce.number().int().min(1).default(1),
+      pageSize: z.coerce.number().int().min(1).max(50).default(12),
+    }), request.query);
+    const where = { userId: auth.user.id, note: { status: 'PUBLISHED' as const } };
+    const [saved, total] = await app.prisma.$transaction([
+      app.prisma.savedNote.findMany({
+        where, orderBy: { createdAt: 'desc' }, skip: (query.page - 1) * query.pageSize, take: query.pageSize,
+        include: {
+          note: {
+            include: {
+              edition: { select: { slug: true } },
+              resources: { where: { resource: { type: 'IMAGE', status: 'PUBLISHED', uploadStatus: 'COMPLETE' } }, orderBy: { sortOrder: 'asc' }, take: 1, include: { resource: true } },
+            },
+          },
+        },
+      }),
+      app.prisma.savedNote.count({ where }),
+    ]);
+    return {
+      items: saved.map(item => {
+        const localized = resolveEditorialTranslation(item.note.localizedContent, query.locale).record;
+        const image = item.note.resources[0]?.resource;
+        const serializedImage = image ? serializeResource(image, query.locale) : null;
+        return {
+          id: item.note.slug, databaseId: item.note.id, slug: item.note.slug,
+          title: localizedString(localized, 'title', item.note.title),
+          thumbnailText: localizedString(localized, 'excerpt', item.note.excerpt),
+          tone: item.note.tone, editionSlug: item.note.edition?.slug ?? null,
+          image: serializedImage ? { url: serializedImage.url, alt: serializedImage.alt } : null,
+          savedAt: item.createdAt.toISOString(),
+        };
+      }),
+      pagination: paginationMeta(query.page, query.pageSize, total),
+    };
   });
 
   app.delete('/auth/saved-notes', async request => {
@@ -238,3 +281,7 @@ export const authRoutes: FastifyPluginAsync = async app => {
     throw new AppError(501, 'OAUTH_PENDING', `El callback OAuth ${provider.toUpperCase()} está reservado para la integración futura.`);
   });
 };
+
+export function currentPasswordOrEmpty(value?: string) {
+  return value ?? '';
+}

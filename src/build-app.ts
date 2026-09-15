@@ -13,12 +13,14 @@ import type { PrismaClient } from './generated/prisma/client.js';
 import { loadConfig, type AppConfig } from './config/env.js';
 import { toHttpError } from './lib/errors.js';
 import { createPrismaClient } from './lib/prisma.js';
+import { enrichOpenApi } from './openapi/documentation.js';
 import { hydrateAuth } from './modules/auth/auth-context.js';
 import { authRoutes } from './modules/auth/auth.routes.js';
 import { publicContentRoutes } from './modules/content/public.routes.js';
 import { adminRoutes } from './modules/admin/admin.routes.js';
 import { resourceRoutes } from './modules/resources/resource.routes.js';
 import { internalAnalyticsRoutes } from './modules/analytics/internal.routes.js';
+import { assistantRoutes } from './modules/assistant/assistant.routes.js';
 import { healthRoutes } from './routes/health.routes.js';
 
 export type BuildAppOptions = {
@@ -92,11 +94,8 @@ export async function buildApp(options: BuildAppOptions = {}) {
     openapi: {
       info: { title: 'La Guillotina API', version: '1.0.0', description: 'API editorial, comunidad y administración.' },
       servers: [{ url: config.apiPrefix }],
-      tags: [
-        { name: 'auth', description: 'Sesiones y perfiles' }, { name: 'public', description: 'Contenido público' },
-        { name: 'admin', description: 'Administración protegida' }, { name: 'analytics', description: 'Métricas anónimas' },
-      ],
     },
+    transformObject: documentObject => enrichOpenApi((documentObject as { openapiObject: Parameters<typeof enrichOpenApi>[0] }).openapiObject),
   });
   await app.register(swaggerUi, { routePrefix: '/documentation' });
 
@@ -110,6 +109,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
   await app.register(healthRoutes, { prefix: config.apiPrefix });
   await app.register(authRoutes, { prefix: config.apiPrefix });
   await app.register(publicContentRoutes, { prefix: config.apiPrefix });
+  await app.register(assistantRoutes, { prefix: config.apiPrefix });
   await app.register(adminRoutes, { prefix: config.apiPrefix });
   await app.register(resourceRoutes, { prefix: config.apiPrefix });
   await app.register(internalAnalyticsRoutes, { prefix: config.apiPrefix });

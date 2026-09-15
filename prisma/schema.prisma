@@ -61,6 +61,15 @@ enum CommentStatus {
   VISIBLE
   HIDDEN
   REPORTED
+  DELETED
+}
+
+enum CommentEmailStatus {
+  PENDING
+  DEVELOPMENT
+  SENT
+  FAILED
+  NOT_APPLICABLE
 }
 
 enum ContactStatus {
@@ -225,6 +234,8 @@ model SiteSettings {
   footerStatement String
   socialPrompt    String
   socialLinks     Json
+  contentByLocale Json     @default("{}")
+  seoByLocale     Json     @default("{}")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
@@ -244,6 +255,8 @@ model Edition {
   summary         String?
   publication     String            @default("La Guillotina")
   headerLine      String            @default("REVISTA ANARQUISTA / CONTRA TODA AUTORIDAD")
+  localizedContent Json             @default("{}")
+  coverArt        Json              @default("{\"preset\":\"archive\",\"elements\":[]}")
   status          EditorialStatus   @default(DRAFT)
   coverResourceId String?           @db.Uuid
   scheduledAt     DateTime?
@@ -284,6 +297,12 @@ model Note {
   tone             String            @default("red")
   readMoreLabel    String            @default("LEER +")
   readMoreSubtitle String?
+  localizedContent Json             @default("{}")
+  coverTitleLines  String[]          @default([])
+  coverExcerpt     String?
+  coverButtonPosition Json?
+  coverDepth       Int?
+  coverTypography  Json             @default("{\"titleSize\":\"standard\",\"titleAlign\":\"left\",\"titleTreatment\":\"brush\",\"excerptSize\":\"standard\"}")
   sortOrder        Int               @default(0)
   editionLink      Boolean           @default(false)
   scheduledAt      DateTime?
@@ -315,6 +334,7 @@ model Category {
   name        String            @unique
   description String
   color       String
+  localizedContent Json             @default("{}")
   status      EditorialStatus   @default(PUBLISHED)
   deletedAt   DateTime?
   createdById String?           @db.Uuid
@@ -351,6 +371,7 @@ model Resource {
   alt              String
   credit           String
   license          String
+  localizedContent Json             @default("{}")
   status           EditorialStatus   @default(DRAFT)
   uploadStatus     UploadStatus      @default(COMPLETE)
   width            Int?
@@ -425,6 +446,7 @@ model ResourceUpload {
 model Comment {
   id               String          @id @default(uuid()) @db.Uuid
   noteId           String          @db.Uuid
+  parentId         String?         @db.Uuid
   userId           String?         @db.Uuid
   authorName       String
   body             String
@@ -433,16 +455,24 @@ model Comment {
   moderationNote   String?
   moderatedById    String?         @db.Uuid
   moderatedAt      DateTime?
+  deletedAt        DateTime?
+  moderationEmailStatus    CommentEmailStatus?
+  moderationEmailMessageId String?
+  moderationEmailError     String?
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
   note             Note            @relation(fields: [noteId], references: [id], onDelete: Restrict)
+  parent           Comment?        @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Restrict)
+  replies          Comment[]       @relation("CommentReplies")
   user             User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
   moderatedBy      User?           @relation("CommentModeratedBy", fields: [moderatedById], references: [id], onDelete: SetNull)
   votes            CommentVote[]
   reports          CommentReport[]
 
   @@index([noteId, status, createdAt])
+  @@index([noteId, parentId, status, createdAt])
   @@index([status, reportCount])
+  @@index([deletedAt])
   @@map("comments")
 }
 

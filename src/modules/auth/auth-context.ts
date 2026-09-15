@@ -71,9 +71,8 @@ export async function rotateCsrf(request: FastifyRequest) {
 }
 
 export async function revokeCurrentSession(request: FastifyRequest, reply: FastifyReply) {
-  if (request.auth) {
-    await request.server.prisma.session.update({ where: { id: request.auth.session.id }, data: { revokedAt: new Date() } });
-  }
+  const auth = requireAuth(request);
+  await request.server.prisma.session.update({ where: { id: auth.session.id }, data: { revokedAt: new Date() } });
   clearSessionCookie(reply);
 }
 
